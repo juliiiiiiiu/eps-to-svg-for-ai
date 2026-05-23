@@ -1,0 +1,4 @@
+interface:
+  display_name: "EPS To SVG Pack"
+  short_description: "Convert EPS packs into named SVG asset folders."
+  default_prompt: "Use this skill to convert EPS artwork into SVG packs, extract individual shapes, and rename folders and files using the established naming rules."
