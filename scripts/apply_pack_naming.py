@@ -6,8 +6,6 @@ import json
 import re
 from pathlib import Path
 
-from generate_preview_html import build_preview
-
 
 SNAKE_CASE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)*$")
 
@@ -20,25 +18,26 @@ def require_snake_case(value: str, label: str) -> None:
 def apply_naming(package_dir: Path, rename_spec_path: Path) -> Path:
     package_dir = package_dir.resolve()
     rename_spec = json.loads(rename_spec_path.read_text(encoding="utf-8"))
-    manifest_path = package_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     package_name = rename_spec["package_name"]
     require_snake_case(package_name, "package_name")
 
-    sheet_name = rename_spec.get("sheet_name", f"{package_name}_shapes_sheet.svg")
-    if not sheet_name.endswith(".svg"):
-        raise SystemExit("sheet_name must end with .svg")
-
-    rename_map = {entry["from"]: entry["to"] for entry in rename_spec["shapes"]}
-    if len(rename_map) != len(rename_spec["shapes"]):
+    shape_entries = rename_spec.get("shapes", [])
+    rename_map = {entry["from"]: entry["to"] for entry in shape_entries}
+    if len(rename_map) != len(shape_entries):
         raise SystemExit("Duplicate source entries found in rename spec")
 
-    shapes_dir = package_dir / "shapes"
-    current_files = {path.name for path in shapes_dir.glob("*.svg")}
+    current_files = {
+        path.name
+        for path in package_dir.glob("*.svg")
+        if not path.name.endswith("_full.svg") and not path.name.endswith("_sheet.svg")
+    }
     missing = sorted(set(rename_map) - current_files)
     if missing:
         raise SystemExit(f"Rename spec references missing files: {', '.join(missing)}")
+    unnamed = sorted(current_files - set(rename_map))
+    if current_files and unnamed:
+        raise SystemExit(f"Rename spec must cover every extracted SVG: {', '.join(unnamed)}")
 
     new_names = list(rename_map.values())
     if len(new_names) != len(set(new_names)):
@@ -54,28 +53,31 @@ def apply_naming(package_dir: Path, rename_spec_path: Path) -> Path:
         raise SystemExit("Could not find the full-sheet SVG inside the package directory")
     full_svg_path = full_svg_candidates[0]
 
-    # Rename shapes through temporary names to avoid collisions.
-    temp_paths: dict[str, Path] = {}
-    for source_name, dest_name in rename_map.items():
-        source_path = shapes_dir / source_name
-        temp_path = shapes_dir / f"__tmp__{dest_name}"
-        source_path.rename(temp_path)
-        temp_paths[dest_name] = temp_path
+    if rename_map:
+        # Rename shapes through temporary names to avoid collisions.
+        temp_paths: dict[str, Path] = {}
+        for source_name, dest_name in rename_map.items():
+            source_path = package_dir / source_name
+            temp_path = package_dir / f"__tmp__{dest_name}"
+            source_path.rename(temp_path)
+            temp_paths[dest_name] = temp_path
 
-    for dest_name, temp_path in temp_paths.items():
-        temp_path.rename(shapes_dir / dest_name)
+        for dest_name, temp_path in temp_paths.items():
+            temp_path.rename(package_dir / dest_name)
 
-    for entry in manifest["shapes"]:
-        old_name = entry["file"]
-        if old_name in rename_map:
-            entry["file"] = rename_map[old_name]
+        full_svg_path.unlink()
+    else:
+        full_svg_path.rename(package_dir / f"{package_name}.svg")
 
-    manifest["package_name"] = package_name
-    manifest["sheet_file"] = sheet_name
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
-
-    full_svg_path.rename(package_dir / sheet_name)
-    build_preview(package_dir)
+    for extra in ("manifest.json", "preview.html"):
+        extra_path = package_dir / extra
+        if extra_path.exists():
+            extra_path.unlink()
+    shapes_dir = package_dir / "shapes"
+    if shapes_dir.exists() and shapes_dir.is_dir():
+        for child in shapes_dir.iterdir():
+            child.unlink()
+        shapes_dir.rmdir()
 
     final_package_dir = package_dir.parent / package_name
     if final_package_dir.exists() and final_package_dir != package_dir:

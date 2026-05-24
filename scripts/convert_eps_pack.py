@@ -11,8 +11,6 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from generate_preview_html import build_preview
-
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -225,9 +223,73 @@ def path_bbox(clip_path: ET.Element) -> dict[str, float]:
     }
 
 
+def group_bbox(group: ET.Element) -> dict[str, float] | None:
+    points: list[tuple[float, float]] = []
+    for path in group.findall(f".//{{{SVG_NS}}}path"):
+        d_value = path.attrib.get("d", "")
+        if d_value:
+            points.extend(extract_points_from_path(d_value))
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return {
+        "x": min(xs),
+        "y": min(ys),
+        "width": max(xs) - min(xs),
+        "height": max(ys) - min(ys),
+    }
+
+
 def shape_sort_key(entry: tuple[str, ET.Element, dict[str, float]]) -> tuple[int, float]:
     bounds = entry[2]
     return round(bounds["y"] / 400), bounds["x"]
+
+
+def is_large_background(bounds: dict[str, float], full_area: float) -> bool:
+    area = bounds["width"] * bounds["height"]
+    return area >= full_area * 0.8
+
+
+def extract_clip_groups(root: ET.Element, clip_paths: dict[str, ET.Element]) -> list[tuple[str, ET.Element, dict[str, float]]]:
+    shape_groups: list[tuple[str, ET.Element, dict[str, float]]] = []
+    for group in root.findall(f".//{{{SVG_NS}}}g"):
+        style = group.attrib.get("style", "")
+        if "clip-path:url(#" not in style:
+            continue
+        clip_id = style.split("clip-path:url(#", 1)[1].split(")", 1)[0]
+        if clip_id == "clippath1" or clip_id not in clip_paths:
+            continue
+        bounds = path_bbox(clip_paths[clip_id])
+        if bounds["width"] < 10 or bounds["height"] < 10:
+            continue
+        shape_groups.append((clip_id, group, bounds))
+    return shape_groups
+
+
+def extract_fill_groups(root: ET.Element, full_area: float) -> list[tuple[str, ET.Element, dict[str, float]]]:
+    canvas_group = None
+    for group in root.findall(f".//{{{SVG_NS}}}g"):
+        style = group.attrib.get("style", "")
+        if "clip-path:url(#clippath1)" in style:
+            canvas_group = group
+            break
+    if canvas_group is None:
+        return []
+
+    shape_groups: list[tuple[str, ET.Element, dict[str, float]]] = []
+    for index, group in enumerate(canvas_group.findall(f"{{{SVG_NS}}}g"), start=1):
+        if "fill" not in group.attrib:
+            continue
+        bounds = group_bbox(group)
+        if not bounds:
+            continue
+        if bounds["width"] < 10 or bounds["height"] < 10:
+            continue
+        if is_large_background(bounds, full_area):
+            continue
+        shape_groups.append((f"fillgroup{index}", group, bounds))
+    return shape_groups
 
 
 def convert_eps_pack(eps_path: Path, destination_root: Path, package_name: str | None = None) -> Path:
@@ -239,9 +301,7 @@ def convert_eps_pack(eps_path: Path, destination_root: Path, package_name: str |
 
     package_stem = package_name or f"{normalize_stem(eps_path.stem)}_svg"
     output_dir = destination_root / package_stem
-    shapes_dir = output_dir / "shapes"
     output_dir.mkdir(parents=True, exist_ok=True)
-    shapes_dir.mkdir(parents=True, exist_ok=True)
 
     full_svg_path = output_dir / f"{package_stem}_full.svg"
     run(
@@ -256,13 +316,8 @@ def convert_eps_pack(eps_path: Path, destination_root: Path, package_name: str |
 
     tree = ET.parse(full_svg_path)
     root = tree.getroot()
-    view_x, view_y, view_width, view_height = parse_viewbox(root)
-    source_viewbox = {
-        "x": view_x,
-        "y": view_y,
-        "width": view_width,
-        "height": view_height,
-    }
+    _view_x, _view_y, view_width, view_height = parse_viewbox(root)
+    full_area = view_width * view_height
 
     clip_paths: dict[str, ET.Element] = {}
     for clip_path in root.findall(f".//{{{SVG_NS}}}clipPath"):
@@ -270,25 +325,19 @@ def convert_eps_pack(eps_path: Path, destination_root: Path, package_name: str |
         if clip_id:
             clip_paths[clip_id] = clip_path
 
-    shape_groups: list[tuple[str, ET.Element, dict[str, float]]] = []
-    for group in root.findall(f".//{{{SVG_NS}}}g"):
-        style = group.attrib.get("style", "")
-        if "clip-path:url(#" not in style:
-            continue
-        clip_id = style.split("clip-path:url(#", 1)[1].split(")", 1)[0]
-        if clip_id == "clippath1" or clip_id not in clip_paths:
-            continue
-        bounds = path_bbox(clip_paths[clip_id])
-        if bounds["width"] < 10 or bounds["height"] < 10:
-            continue
-        shape_groups.append((clip_id, group, bounds))
+    clip_groups = extract_clip_groups(root, clip_paths)
+    fill_groups = extract_fill_groups(root, full_area)
+
+    if fill_groups and (not clip_groups or len(fill_groups) >= len(clip_groups) + 3):
+        shape_groups = fill_groups
+    else:
+        shape_groups = clip_groups
 
     if not shape_groups:
-        raise SystemExit("No extractable clip groups found in the converted SVG")
+        return output_dir
 
     shape_groups.sort(key=shape_sort_key)
 
-    manifest: list[dict[str, object]] = []
     for index, (clip_id, group, bounds) in enumerate(shape_groups, start=1):
         file_name = f"shape_{index:02d}.svg"
         shape_root = ET.Element(
@@ -304,38 +353,13 @@ def convert_eps_pack(eps_path: Path, destination_root: Path, package_name: str |
         )
         title = ET.SubElement(shape_root, f"{{{SVG_NS}}}title")
         title.text = f"{package_stem} shape {index:02d}"
-        defs = ET.SubElement(shape_root, f"{{{SVG_NS}}}defs")
-        defs.append(copy.deepcopy(clip_paths[clip_id]))
+        if clip_id in clip_paths:
+            defs = ET.SubElement(shape_root, f"{{{SVG_NS}}}defs")
+            defs.append(copy.deepcopy(clip_paths[clip_id]))
         shape_root.append(copy.deepcopy(group))
 
-        shape_path = shapes_dir / file_name
+        shape_path = output_dir / file_name
         ET.ElementTree(shape_root).write(shape_path, encoding="utf-8", xml_declaration=True)
-
-        manifest.append(
-            {
-                "file": file_name,
-                "clip_id": clip_id,
-                "viewBox": {
-                    "x": round(bounds["x"], 2),
-                    "y": round(bounds["y"], 2),
-                    "width": round(bounds["width"], 2),
-                    "height": round(bounds["height"], 2),
-                },
-            }
-        )
-
-    package_manifest = {
-        "source_eps": str(eps_path),
-        "package_name": output_dir.name,
-        "sheet_file": full_svg_path.name,
-        "source_viewBox": source_viewbox,
-        "shapes": manifest,
-    }
-    (output_dir / "manifest.json").write_text(
-        json.dumps(package_manifest, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    build_preview(output_dir)
     return output_dir
 
 

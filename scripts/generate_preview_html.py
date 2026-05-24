@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 
@@ -64,7 +63,7 @@ HTML_TEMPLATE = """<!doctype html>
       async function load() {{
         const grid = document.getElementById("grid");
         for (const file of files) {{
-          const response = await fetch(`./shapes/${{file}}`);
+          const response = await fetch(`./${{file}}`);
           const svg = await response.text();
           const card = document.createElement("article");
           card.className = "card";
@@ -86,11 +85,13 @@ HTML_TEMPLATE = """<!doctype html>
 
 
 def build_preview(package_dir: Path) -> Path:
-    manifest_path = package_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    files = [entry["file"] for entry in manifest["shapes"]]
+    files = sorted(
+        path.name
+        for path in package_dir.glob("*.svg")
+        if not path.name.endswith("_full.svg") and not path.name.endswith("_sheet.svg")
+    )
     title = package_dir.name
-    html = HTML_TEMPLATE.format(title=title, files_json=json.dumps(files))
+    html = HTML_TEMPLATE.format(title=title, files_json=repr(files))
     output = package_dir / "preview.html"
     output.write_text(html, encoding="utf-8")
     return output

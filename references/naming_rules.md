@@ -1,6 +1,6 @@
 # Naming Rules
 
-Use these rules for every generated package and every extracted SVG.
+Use these rules for every final package folder and every exported SVG asset kept inside it.
 
 ## Folder Names
 
@@ -15,15 +15,6 @@ Examples:
 - `flat-design-colorful-retro-geometric-shape-illustration` -> `colorful_retro_geometric`
 - `colourful-abstract-shapes-fluid-hand-drawn-organic-shapes-vector-shape-creative-element` -> `colourful_abstract_fluid_hand_drawn`
 - `gradient-grainy-gradient-shapes` -> `gradient_grainy`
-
-## Full-Sheet SVG Name
-
-- Use `<folder_name>_shapes_sheet.svg`.
-
-Examples:
-
-- `neon_gradient_fluid_shapes_sheet.svg`
-- `colorful_retro_geometric_shapes_sheet.svg`
 
 ## Individual Shape SVG Names
 
@@ -53,12 +44,17 @@ Examples:
 - Prefer `hook_blob` over `question_mark_shape`.
 - Prefer `rounded_rect_blob` over `soft_square_liquid`.
 
+## Single-SVG Fallback
+
+- If a pack cannot be split into trustworthy individual shapes, keep one SVG for the whole pack.
+- Name that file `<folder_name>.svg`.
+
 ## Final Check
 
 Before applying names, verify:
 
 - folder name matches the pack’s style family
-- full-sheet file name uses the final folder name
-- each extracted SVG name is unique
+- each exported SVG name is unique
 - names are short enough to scan quickly
 - no spaces, hyphens, or uppercase letters remain
+- the final package folder contains only SVG assets you intend to keep
